@@ -8,78 +8,59 @@
 using namespace cv;
 using namespace std;
 
-void common_matchTemplate( Mat&, Mat&, Mat&, int method, int cn);
-void textureMatching_NCC(Mat&, Mat&, Mat&);
+void textureMatching_NCC(Mat&, Mat&, Mat&, const int&, Mat&);
 void meanStdDev(Mat&, double&, double&);
+void draw(const Mat&, const Point&, Mat&);
 
-void textureMatching_NCC(Mat& src, Mat& templ, Mat& out ){
-
+void textureMatching_NCC(Mat& src, Mat& templ, Mat& out, const int& thres,  Mat& mask){
     // inverse template pixel counts
     const double invArea = 1./((double)templ.cols * templ.rows);
     // get template mean and std
     double templMean, templStdDev;
     meanStdDev(templ, templMean, templStdDev);
     
-    // for(int i = templ.rows/2; i < out.rows - templ.rows/2; ++i){
-    //     uchar* out_row = out.ptr<uchar>(i);
-    //     for(int j = templ.cols/2; j < out.cols - templ.cols/2; ++j){
-    //         int srcSum = 0;
-    //         int srcSqrSum = 0;
-    //         double cov_xy = 0;
-    //         for(int h = i - templ.rows/2; h < i + templ.rows/2; h++){
-    //             uchar* src_row = src.ptr<uchar>(h);
-    //             uchar* templ_row = templ.ptr<uchar>(h);
-    //             for(int w = j - templ.cols/2; w < j + templ.cols/2; w++){
-    //                 // add srcSum and srcSqrSum
-    //                 srcSum += src_row[w];
-    //                 srcSqrSum += src_row[w] * src_row[w];
-    //                 // add to covariance(src, templ)
-    //                 cov_xy += src_row[w] * templ_row[w];
-    //             } 
-    //         }
-    //         const double srcMean = (double) srcSum * invArea;
-    //         const double srcStdDev = std::sqrt(srcSqrSum * invArea - srcMean * srcMean);
-
-            
-    //         // 
-    //         const double CORR = (cov_xy - (srcMean*templMean)) / (srcStdDev*templStdDev);
-    //         cout<<CORR<<endl;
-    //         out_row[j] = (int)127.5 * CORR + 127.5;
-    //     }
-    // }
     for(int i = templ.rows/2; i < out.rows - templ.rows/2; ++i){
         uchar* out_row = out.ptr<uchar>(i);
+        uchar* mask_row = mask.ptr<uchar>(i);
         for(int j = templ.cols/2; j < out.cols - templ.cols/2; ++j){
+            if(mask_row[j] == 0){
+                continue;
+            }
             int srcSum = 0;
             int srcSqrSum = 0;
             double cov_xy = 0;
-            for(int h = i - templ.rows/2; h < i + templ.rows/2; h++){
+            
+            int th = 0;
+            for(int h = i - templ.rows/2; h < i + templ.rows/2 + templ.rows%2; ++h){
+                int tw = 0;
                 uchar* src_row = src.ptr<uchar>(h);
-                for(int w = j - templ.cols/2; w < j + templ.cols/2; w++){
+                uchar* templ_row = templ.ptr<uchar>(th);
+                for(int w = j - templ.cols/2; w < j + templ.cols/2 + templ.cols%2; ++w){
                     // add srcSum and srcSqrSum
                     srcSum += src_row[w];
                     srcSqrSum += src_row[w] * src_row[w];
+                    // add to covariance(src, templ)
+                    cov_xy += src_row[w] * templ_row[tw] * invArea;
+                    ++tw;
                 } 
+                ++th;
             }
+            
             const double srcMean = (double) srcSum * invArea;
             const double srcStdDev = std::sqrt(srcSqrSum * invArea - srcMean * srcMean);
 
-            for(int h = i - templ.rows/2; h < i + templ.rows/2; h++){
-                uchar* src_row = src.ptr<uchar>(h);
-                uchar* templ_row = templ.ptr<uchar>(h);
-                for(int w = j - templ.cols/2; w < j + templ.cols/2; w++){
-                    // add to covariance(src, templ)
-                    cov_xy += (src_row[w] - srcMean) * (templ_row[w] - templMean);
-                } 
+            // corr
+            const double CORR = (cov_xy - (srcMean*templMean)) / (srcStdDev*templStdDev);
+            uchar p = ((int)127.5 * CORR + 127.5);
+            if(thres < p){
+                out_row[j] = p;
+                mask_row[j] = 255;
+            }else{
+                out_row[j] = 0;
+                mask_row[j] = 0;
             }
-            
-            // 
-            const double CORR = (cov_xy) / (srcStdDev*templStdDev);
-            cout<<CORR<<endl;
-            out_row[j] = (int)127.5 * CORR + 127.5;
         }
     }
-
 }
 
 void meanStdDev(Mat& img, double& mean, double& stdDev){
@@ -97,116 +78,73 @@ void meanStdDev(Mat& img, double& mean, double& stdDev){
     stdDev = std::sqrt(sqrtSum * invArea - mean * mean);
 }
 
-int main()
+void draw(const Mat& templ, const Point2i& center, Mat& out){
+    Point2i p1 = Point2i(center.x - templ.cols/2, center.y - templ.rows/2);
+    Point2i p2 = Point2i(center.x + templ.cols/2, center.y + templ.rows/2);
+    cv::Rect rect(p1, p2);
+    cv::rectangle(out, rect, cv::Scalar(255, 0, 255), 3);
+}
+
+int main(int argc, char **argv)
 {   
-    cv::Mat src = cv::imread("src.jpg", cv::ImreadModes::IMREAD_GRAYSCALE);
-    cv::Mat templ = cv::imread("temp.jpg", cv::ImreadModes::IMREAD_GRAYSCALE);
-    //cv::Mat out(src.rows, src.cols, CV_8UC1, Scalar(0));
-    cv::Mat out = cv::imread("src.jpg", cv::ImreadModes::IMREAD_GRAYSCALE);
+    char* srcPath = argv[1];
+    char* templPath = argv[2];
+    int thres = atoi(argv[3]);
+    
+    // init basic Mat
+    cv::Mat src = cv::imread(srcPath, cv::ImreadModes::IMREAD_GRAYSCALE);
+    cv::Mat templ = cv::imread(templPath, cv::ImreadModes::IMREAD_GRAYSCALE);
+    cv::Mat out(src.rows, src.cols, CV_8UC1, Scalar(0));
+    cv::Mat mask(src.rows, src.cols, CV_8UC1, Scalar(255));
+
+    // built in opencv method
+    cout << " ========== built in opencv method ========== "<< endl;
+    Mat out_cv = out.clone();
+
     int64 e1 = cv::getTickCount();
-    //common_matchTemplate(src, temp, src, 1, 1);
-    textureMatching_NCC(src, templ, out);
+
+    cv::matchTemplate(src, templ, out_cv, TM_CCOEFF_NORMED);
+
     int64 e2 = cv::getTickCount();
     double time = (e2 - e1) / cv::getTickFrequency();
-    
     std::cout << time << " sec" << std::endl;
-    cv::imshow("res", out);
-    cv::waitKey(0);
+    //cv::imshow("opencv", out_cv);
+    //cv::waitKey(0);
+    //cv::imwrite("opencv.jpg", out_cv);
+    cout << " ========== built in opencv method end ========== "<< endl;
+
+    // implement method
+    cout << " ========== implement method ========== "<< endl;
+
+    // clone basic Mat to do Image Pyramids
+    cv::Mat src_py = src.clone();
+    cv::Mat templ_py = templ.clone();
+
+    // start time
+    e1 = cv::getTickCount();
+    cv::pyrDown(src_py, src_py, cv::Size(src_py.cols/2, src_py.rows/2));
+    cv::pyrDown(templ_py, templ_py, cv::Size(templ_py.cols/2, templ_py.rows/2));
+    cv::pyrDown(mask, mask, cv::Size(mask.cols/2, mask.rows/2));
+    cv::pyrDown(src_py, src_py, cv::Size(src_py.cols/2, src_py.rows/2));
+    cv::pyrDown(templ_py, templ_py, cv::Size(templ_py.cols/2, templ_py.rows/2));
+    cv::pyrDown(mask, mask, cv::Size(mask.cols/2, mask.rows/2));
+    
+    textureMatching_NCC(src_py, templ_py, mask, thres, mask);
+    
+    cv::pyrUp(mask, mask, cv::Size(mask.cols*2, mask.rows*2));
+    cv::pyrUp(mask, mask, cv::Size(mask.cols*2, mask.rows*2));
+
+    textureMatching_NCC(src, templ, out, thres, mask);
+
+    // end time
+    e2 = cv::getTickCount();
+    time = (e2 - e1) / cv::getTickFrequency();
+    std::cout << time << " sec" << std::endl;
+    cv::imwrite("implement.jpg", out);
+    cout << " ========== implement method end ========== "<< endl;
+
+    
+    
 
     return 0;
 }
-
-void common_matchTemplate( Mat& img, Mat& templ, Mat& result, int method = 1, int cn = 1)
-{
-    int numType = 1;
-    bool isNormed = true;
-
-    double invArea = 1./((double)templ.rows * templ.cols);
-
-    Mat sum, sqsum;
-    Scalar templMean, templSdv;
-    double *q0 = 0, *q1 = 0, *q2 = 0, *q3 = 0;
-    double templNorm = 0;
-
-    
-
-    integral(img, sum, sqsum, CV_64F);
-    meanStdDev( templ, templMean, templSdv );
-
-    templNorm = templSdv[0]*templSdv[0] + templSdv[1]*templSdv[1] + templSdv[2]*templSdv[2] + templSdv[3]*templSdv[3];
-    
-    templNorm = std::sqrt(templNorm);
-    templNorm /= std::sqrt(invArea); // care of accuracy here
-
-   
-    q0 = (double*)sqsum.data;
-    q1 = q0 + templ.cols*cn;
-    q2 = (double*)(sqsum.data + templ.rows*sqsum.step);
-    q3 = q2 + templ.cols*cn;
-
-
-    double* p0 = (double*)sum.data;
-    double* p1 = p0 + templ.cols*cn;
-    double* p2 = (double*)(sum.data + templ.rows*sum.step);
-    double* p3 = p2 + templ.cols*cn;
-
-    int sumstep = sum.data ? (int)(sum.step / sizeof(double)) : 0;
-    int sqstep = sqsum.data ? (int)(sqsum.step / sizeof(double)) : 0;
-
-    int i, j, k;
-
-    for( i = 0; i < result.rows; i++ )
-    {
-        float* rrow = result.ptr<float>(i);
-        int idx = i * sumstep;
-        int idx2 = i * sqstep;
-
-        for( j = 0; j < result.cols; j++, idx += cn, idx2 += cn )
-        {
-            double num = rrow[j], t;
-            double wndMean2 = 0, wndSum2 = 0;
-
-            if( numType == 1 )
-            {
-                for( k = 0; k < cn; k++ )
-                {
-                    t = p0[idx+k] - p1[idx+k] - p2[idx+k] + p3[idx+k];
-                    wndMean2 += t*t;
-                    num -= t*templMean[k];
-                }
-
-                wndMean2 *= invArea;
-            }
-
-            if(isNormed)
-            {
-                for( k = 0; k < cn; k++ )
-                {
-                    t = q0[idx2+k] - q1[idx2+k] - q2[idx2+k] + q3[idx2+k];
-                    wndSum2 += t;
-                }
-            }
-
-            if(isNormed)
-            {
-                double diff2 = MAX(wndSum2 - wndMean2, 0);
-                if (diff2 <= std::min(0.5, 10 * FLT_EPSILON * wndSum2))
-                    t = 0; // avoid rounding errors
-                else
-                    t = std::sqrt(diff2)*templNorm;
-
-                if( fabs(num) < t )
-                    num /= t;
-                else if( fabs(num) < t*1.125 )
-                    num = num > 0 ? 1 : -1;
-                else
-                    num = 1;
-            }
-
-            rrow[j] = (float)num;
-        }
-    }
-}
-
-
-
